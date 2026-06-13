@@ -14,7 +14,7 @@ from services.database import (
 from services.storage import download_frame
 from services.yolo import run_inference
 
-QUEUE_NAME = "event-analysis"
+QUEUE_NAME = "ai-analysis"
 
 def calculate_risk(detections: list, accel_data: dict, event_type: str) -> tuple[int, str]:
     """
