@@ -178,10 +178,22 @@ async def main():
                 "port": int(os.environ.get("REDIS_PORT", 6379)),
             },
             "concurrency": int(os.environ.get("WORKER_CONCURRENCY", 2)),
+            "stalledInterval": 30000,
+            "maxStalledCount": 2,
         }
     )
 
-    # Worker-i açıq saxla
+    async def on_failed(job, err, prev_state):
+        attempts = job.attempts_made if hasattr(job, 'attempts_made') else 0
+        print(f"[Worker] İş uğursuz — eventId: {job.data.get('eventId')}, cəhd: {attempts}, xəta: {err}")
+        if attempts >= 3:
+            event_id = job.data.get("eventId")
+            if event_id:
+                update_event_failed(event_id, str(err))
+                print(f"[Worker] FAILED yazildi — eventId: {event_id}")
+
+    worker.on("failed", on_failed)
+
     await asyncio.Future()
 
 if __name__ == "__main__":
