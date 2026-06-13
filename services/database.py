@@ -13,7 +13,7 @@ def update_event_processing(event_id: str):
     try:
         with conn.cursor() as cur:
             cur.execute(
-                """UPDATE "trip_events" SET "aiStatus" = 'PROCESSING', "updatedAt" = NOW() WHERE id = %s""",
+                """UPDATE trip_events SET "aiStatus" = 'PROCESSING' WHERE id = %s""",
                 (event_id,)
             )
         conn.commit()
@@ -27,13 +27,12 @@ def update_event_completed(event_id: str, ai_result: dict, severity: str, score:
         with conn.cursor() as cur:
             cur.execute(
                 """
-                UPDATE "trip_events"
+                UPDATE trip_events
                 SET "aiStatus"   = 'COMPLETED',
                     "aiResult"   = %s,
-                    "severity"   = %s,
-                    "score"      = %s,
-                    "analyzedAt" = %s,
-                    "updatedAt"  = NOW()
+                    severity     = %s,
+                    score        = %s,
+                    "analyzedAt" = %s
                 WHERE id = %s
                 """,
                 (json.dumps(ai_result), severity, score, datetime.now(timezone.utc), event_id)
@@ -48,7 +47,7 @@ def update_event_failed(event_id: str, reason: str):
     try:
         with conn.cursor() as cur:
             cur.execute(
-                """UPDATE "trip_events" SET "aiStatus" = 'FAILED', "errorReason" = %s, "updatedAt" = NOW() WHERE id = %s""",
+                """UPDATE trip_events SET "aiStatus" = 'FAILED', "errorReason" = %s WHERE id = %s""",
                 (reason, event_id)
             )
         conn.commit()
@@ -63,7 +62,7 @@ def get_driver_fcm_token(event_id: str):
             cur.execute(
                 """
                 SELECT d."fcmToken"
-                FROM "trip_events" te
+                FROM trip_events te
                 JOIN trips t ON t.id = te."tripId"
                 JOIN drivers d ON d.id = t."driverId"
                 WHERE te.id = %s
