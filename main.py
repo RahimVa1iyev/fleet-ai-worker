@@ -4,6 +4,42 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
+import firebase_admin
+from firebase_admin import credentials, messaging
+
+# Firebase başlat
+_firebase_app = None
+
+def get_firebase_app():
+    global _firebase_app
+    if _firebase_app is None:
+        cred_path = os.environ.get("FCM_SERVICE_ACCOUNT_PATH", "/secrets/firebase-adminsdk.json")
+        cred = credentials.Certificate(cred_path)
+        _firebase_app = firebase_admin.initialize_app(cred)
+    return _firebase_app
+
+def send_fcm_notification(fcm_token: str, event_id: str, severity: str, event_type: str):
+    try:
+        get_firebase_app()
+        if severity == "HIGH":
+            message = messaging.Message(
+                notification=messaging.Notification(
+                    title="Təhlükəli hadisə",
+                    body=f"{event_type} — HIGH risk aşkarlandı",
+                ),
+                data={"eventId": event_id, "severity": severity, "type": "analysis_done"},
+                token=fcm_token,
+            )
+        else:
+            message = messaging.Message(
+                data={"eventId": event_id, "severity": severity, "type": "analysis_done"},
+                token=fcm_token,
+            )
+        messaging.send(message)
+        print(f"[Worker] FCM göndərildi — eventId: {event_id}, severity: {severity}")
+    except Exception as e:
+        print(f"[Worker] FCM xətası: {e}")
+
 from bullmq import Worker
 from services.database import (
     update_event_processing,
@@ -116,6 +152,13 @@ async def process_job(job, job_token):
         # 6. DB-yə yaz
         update_event_completed(event_id, ai_result, severity, score)
         print(f"[Worker] DB yeniləndi — COMPLETED")
+
+        # 7. FCM push
+        fcm_token = get_driver_fcm_token(event_id)
+        if fcm_token:
+            send_fcm_notification(fcm_token, event_id, severity, event_type)
+        else:
+            print(f"[Worker] FCM token tapilmadi — eventId: {event_id}")
 
     except Exception as e:
         error_msg = str(e)
