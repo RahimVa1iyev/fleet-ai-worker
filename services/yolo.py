@@ -40,7 +40,41 @@ def preprocess(image_bytes: bytes) -> np.ndarray:
     arr = np.expand_dims(arr, axis=0)     # batch dimension əlavə et
     return arr
 
-def run_inference(image_bytes: bytes) -> list[dict]:
+def run_inference(image_bytes: bytes) -> list:
+    session = get_session()
+    input_tensor = preprocess(image_bytes)
+    input_name = session.get_inputs()[0].name
+    outputs = session.run(None, {input_name: input_tensor})
+
+    # YOLOv8 output shape: (1, 84, 8400)
+    # 84 = 4 (bbox) + 80 (class scores)
+    predictions = outputs[0][0]  # shape: (84, 8400)
+
+    detections = []
+
+    for i in range(predictions.shape[1]):  # 8400 detection
+        col = predictions[:, i]
+        class_scores = col[4:]             # 80 class score
+        class_id = int(np.argmax(class_scores))
+        confidence = float(class_scores[class_id])
+
+        if confidence < 0.25:
+            continue
+
+        class_name = COCO_CLASSES[class_id] if class_id < len(COCO_CLASSES) else "unknown"
+        detections.append({
+            "object": class_name,
+            "confidence": round(confidence, 2)
+        })
+
+    # Unikal saxla — hər obyektdən ən yüksək confidence-lı olanı
+    seen = {}
+    for d in detections:
+        key = d["object"]
+        if key not in seen or d["confidence"] > seen[key]["confidence"]:
+            seen[key] = d
+
+    return list(seen.values())
     """
     Frame-i analiz et, aşkarlamaları qaytar.
     Hər element: {object, confidence}
