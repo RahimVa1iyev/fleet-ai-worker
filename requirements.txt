@@ -1,7 +1,8 @@
-bullmq==2.9.0
-boto3==1.35.0
-psycopg2-binary==2.9.9
-onnxruntime==1.19.2
-numpy==1.26.4
-Pillow==10.4.0
-python-dotenv==1.0.1
+bullmq
+boto3
+psycopg2-binary
+onnxruntime
+numpy
+Pillow
+python-dotenv
+firebase-admin
