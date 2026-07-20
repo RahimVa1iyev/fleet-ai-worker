@@ -52,6 +52,8 @@ from services.database import (
 )
 from services.storage import download_frame
 from services.yolo import run_inference
+from services.enrichment import get_weather, get_road_info
+from services.narrative import generate_narrative
 
 QUEUE_NAME = "ai-analysis"
 
@@ -124,6 +126,9 @@ async def process_job(job, job_token):
     frame_key  = data.get("frameR2Key") or data.get("frameUrl", "").replace("r2://fleet-events/", "")
     accel_data = data.get("accelData", {})
     event_type = data.get("eventType", "HARSH_BRAKING")
+    gps        = data.get("gps") or {}
+    lat        = gps.get("lat")
+    lng        = gps.get("lng")
 
     print(f"[Worker] İş başladı — eventId: {event_id}, type: {event_type}")
 
@@ -147,14 +152,47 @@ async def process_job(job, job_token):
         # 5. Xülasə yarat
         summary = build_summary(detections, event_type, severity, score)
 
+        # 5.1. Enrichment (Weather & Road)
+        weather_info = None
+        road_info = None
+        if lat is not None and lng is not None:
+            try:
+                weather_info = get_weather(float(lat), float(lng))
+                road_info = get_road_info(float(lat), float(lng))
+            except Exception as e:
+                print(f"[Worker] Enrichment xətası (uduldu): {e}")
+        else:
+            print(f"[Worker] GPS tapılmadı — eventId: {event_id}, enrichment atlanır")
+
+        # 5.2. Narrative Generation
+        narrative_result = None
+        try:
+            facts = {
+                "eventType": event_type,
+                "speedKmhBefore": data.get("speedKmhBefore"),
+                "speedKmhAfter": data.get("speedKmhAfter"),
+                "gForce": accel_data.get("gForce") if accel_data else None,
+                "detections": detections,
+                "weather": weather_info,
+                "roadType": road_info.get("roadType") if road_info else None,
+                "speedLimitKmh": road_info.get("speedLimitKmh") if road_info else None,
+                "timeOfDay": data.get("timeOfDay")
+            }
+            narrative_result = generate_narrative(facts)
+        except Exception as e:
+            print(f"[Worker] Narrative xətası (uduldu): {e}")
+
         ai_result = {
             "detections": detections,
             "riskScore":  score,
             "summary":    summary,
+            "weather":    weather_info,
+            "roadInfo":   road_info,
+            "narrative":  narrative_result
         }
 
         # 6. DB-yə yaz
-        update_event_completed(event_id, ai_result, severity, score)
+        update_event_completed(event_id, ai_result, severity, score, weather_info, road_info, narrative_result)
         print(f"[Worker] DB yeniləndi — COMPLETED")
 
         # 7. FCM push

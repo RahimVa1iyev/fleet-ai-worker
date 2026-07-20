@@ -21,9 +21,15 @@ def update_event_processing(event_id: str):
         conn.close()
 
 
-def update_event_completed(event_id: str, ai_result: dict, severity: str, score: int):
+def update_event_completed(event_id: str, ai_result: dict, severity: str, score: int, weather_info: dict = None, road_info: dict = None, narrative_result: dict = None):
     conn = get_connection()
     try:
+        weather_data_json = json.dumps(weather_info) if weather_info else None
+        road_type = road_info.get("roadType") if road_info else None
+        speed_limit = road_info.get("speedLimitKmh") if road_info else None
+        narrative_text = narrative_result.get("text") if narrative_result else None
+        narrative_gen_by = narrative_result.get("generatedBy") if narrative_result else None
+
         with conn.cursor() as cur:
             cur.execute(
                 """
@@ -32,10 +38,19 @@ def update_event_completed(event_id: str, ai_result: dict, severity: str, score:
                     "aiResult"   = %s,
                     severity     = %s,
                     score        = %s,
-                    "analyzedAt" = %s
+                    "analyzedAt" = %s,
+                    "weatherData" = %s,
+                    "roadType"    = %s,
+                    "speedLimitKmh" = %s,
+                    narrative     = %s,
+                    "narrativeGeneratedBy" = %s
                 WHERE id = %s
                 """,
-                (json.dumps(ai_result), severity, score, datetime.now(timezone.utc), event_id)
+                (
+                    json.dumps(ai_result), severity, score, datetime.now(timezone.utc),
+                    weather_data_json, road_type, speed_limit, narrative_text, narrative_gen_by,
+                    event_id
+                )
             )
         conn.commit()
     finally:
