@@ -97,10 +97,18 @@ def get_road_info(lat: float, lng: float) -> dict:
         url = "https://overpass-api.de/api/interpreter"
         headers = {"User-Agent": USER_AGENT}
         
-        response = requests.post(url, headers=headers, data={"data": query}, timeout=5)
-        response.raise_for_status()
-
-        data = response.json()
+        max_retries = 1
+        for attempt in range(max_retries + 1):
+            try:
+                response = requests.post(url, headers=headers, data={"data": query}, timeout=10)
+                response.raise_for_status()
+                data = response.json()
+                break
+            except Exception as e:
+                if attempt < max_retries:
+                    time.sleep(1)
+                else:
+                    raise e
         elements = data.get("elements", [])
 
         if not elements:
