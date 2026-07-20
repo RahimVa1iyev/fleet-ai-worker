@@ -1,1 +1,24 @@
+# Python
 __pycache__/
+*.py[cod]
+*$py.class
+*.so
+
+# Environments
+.env
+.env.example
+.venv
+env/
+venv/
+ENV/
+
+# OS generated files
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+
+# IDEs
+.vscode/
+.idea/

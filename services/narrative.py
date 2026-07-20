@@ -2,7 +2,8 @@ import os
 import json
 import time
 import hashlib
-import google.generativeai as genai
+from google import genai
+from google.genai import types
 
 # Sadə in-memory cache
 # Format: {"hash_key": (data_dict, timestamp)}
@@ -48,7 +49,8 @@ def generate_narrative(facts: dict) -> dict:
             print("[Narrative] xəta — səbəb: GEMINI_API_KEY tapılmadı")
             return default_response
             
-        genai.configure(api_key=api_key)
+        # Yeni SDK: Client vasitəsilə 10000 ms (10 saniyə) timeout ilə yaradılır
+        client = genai.Client(api_key=api_key, http_options=types.HttpOptions(timeout=10000))
         
         system_instruction = """Sən avtomobil telematikası və təhlükəsizlik sistemləri üçün hesabat hazırlayan neytral köməkçisən.
 Aşağıdakı qaydalara CİDDİ şəkildə əməl et:
@@ -61,15 +63,11 @@ Aşağıdakı qaydalara CİDDİ şəkildə əməl et:
         filtered_facts = {k: v for k, v in facts.items() if v is not None}
         prompt = f"Hadisə faktları:\n{json.dumps(filtered_facts, ensure_ascii=False, indent=2)}\n\nBu faktlara əsasən yuxarıdakı qaydalara uyğun obyektiv hesabat mətni yarat."
         
-        model = genai.GenerativeModel(
-            model_name=model_name,
-            system_instruction=system_instruction
-        )
-        
-        # Request-ə timeout əlavə edirik (10 saniyə)
-        response = model.generate_content(
-            prompt,
-            request_options={"timeout": 10.0}
+        # Yeni SDK: generate_content formatı və config (system_instruction ilə)
+        response = client.models.generate_content(
+            model=model_name,
+            contents=prompt,
+            config=types.GenerateContentConfig(system_instruction=system_instruction)
         )
         
         narrative_text = response.text.strip()
