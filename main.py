@@ -18,7 +18,7 @@ def get_firebase_app():
         _firebase_app = firebase_admin.initialize_app(cred)
     return _firebase_app
 
-def send_fcm_notification(fcm_token: str, event_id: str, severity: str, event_type: str):
+def send_fcm_notification(fcm_token: str, event_id: str, driver_id: str, severity: str, event_type: str):
     try:
         get_firebase_app()
         if severity == "HIGH":
@@ -35,10 +35,13 @@ def send_fcm_notification(fcm_token: str, event_id: str, severity: str, event_ty
                 data={"eventId": event_id, "severity": severity, "type": "analysis_done"},
                 token=fcm_token,
             )
-        messaging.send(message)
-        print(f"[Worker] FCM göndərildi — eventId: {event_id}, severity: {severity}")
+        response = messaging.send(message)
+        print(f"[Worker] FCM göndərildi — eventId: {event_id}, driverId: {driver_id}, severity: {severity}, messageId: {response}")
     except Exception as e:
-        print(f"[Worker] FCM xətası: {e}")
+        error_msg = str(e)
+        print(f"[Worker] FCM xətası — eventId: {event_id}, driverId: {driver_id}, xəta: {error_msg}")
+        if "not a valid FCM registration token" in error_msg or "not registered" in error_msg.lower() or "invalid" in error_msg.lower():
+            print(f"[Worker] Diqqət — token etibarsızdır, DB-də təmizlənməlidir: driverId: {driver_id}")
 
 from bullmq import Worker
 from services.database import (
@@ -117,6 +120,7 @@ async def process_job(job, job_token):
     """BullMQ-dan gələn hər işi emal et"""
     data = job.data
     event_id   = data.get("eventId")
+    driver_id  = data.get("driverId", "unknown")
     frame_key  = data.get("frameR2Key") or data.get("frameUrl", "").replace("r2://fleet-events/", "")
     accel_data = data.get("accelData", {})
     event_type = data.get("eventType", "HARSH_BRAKING")
@@ -156,9 +160,9 @@ async def process_job(job, job_token):
         # 7. FCM push
         fcm_token = get_driver_fcm_token(event_id)
         if fcm_token:
-            send_fcm_notification(fcm_token, event_id, severity, event_type)
+            send_fcm_notification(fcm_token, event_id, driver_id, severity, event_type)
         else:
-            print(f"[Worker] FCM token tapilmadi — eventId: {event_id}")
+            print(f"[Worker] FCM token tapilmadi — eventId: {event_id}, driverId: {driver_id}")
 
     except Exception as e:
         error_msg = str(e)
