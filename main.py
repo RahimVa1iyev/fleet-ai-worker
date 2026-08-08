@@ -42,6 +42,11 @@ def send_fcm_notification(fcm_token: str, event_id: str, driver_id: str, severit
         print(f"[Worker] FCM xətası — eventId: {event_id}, driverId: {driver_id}, xəta: {error_msg}")
         if "not a valid FCM registration token" in error_msg or "not registered" in error_msg.lower() or "invalid" in error_msg.lower():
             print(f"[Worker] Diqqət — token etibarsızdır, DB-də təmizlənməlidir: driverId: {driver_id}")
+            try:
+                clear_driver_fcm_token(driver_id)
+                print(f"[Worker] Token DB-də təmizləndi: driverId: {driver_id}")
+            except Exception as clear_err:
+                print(f"[Worker] Token təmizlənərkən xəta: {str(clear_err)}")
 
 from bullmq import Worker
 from services.database import (
@@ -49,6 +54,8 @@ from services.database import (
     update_event_completed,
     update_event_failed,
     get_driver_fcm_token,
+    clear_driver_fcm_token,
+    get_event_status,
 )
 from services.storage import download_frame
 from services.yolo import run_inference
@@ -57,7 +64,13 @@ from services.narrative import generate_narrative
 
 QUEUE_NAME = "ai-analysis"
 
-def calculate_risk(detections: list, accel_data: dict, event_type: str) -> tuple[int, str]:
+def calculate_risk(
+    detections: list, 
+    accel_data: dict, 
+    event_type: str,
+    current_speed_kmh: float = None,
+    speed_limit_kmh: float = None,
+) -> tuple[int, str]:
     """
     Evristik risk xalı hesabla.
     Qaytarır: (score, severity)
@@ -66,34 +79,54 @@ def calculate_risk(detections: list, accel_data: dict, event_type: str) -> tuple
 
     # 1. Hadisə növünə görə baza xal
     base_scores = {
-        "COLLISION":     60,
-        "HARSH_BRAKING": 30,
-        "SHARP_TURN":    20,
+        "COLLISION":            70,
+        "HARSH_BRAKING":        30,
+        "SHARP_TURN":           20,
+        "HARSH_ACCELERATION":   15,
     }
-    score += base_scores.get(event_type, 20)
 
-    # 2. Aşkarlanan obyektlərə görə xal
-    high_risk_objects = {"person", "bicycle", "motorcycle", "child"}
+    if event_type == "SPEEDING":
+        # SPEEDING üçün dinamik hesablama — sürət limitinin neçə 
+        # faiz aşıldığına əsaslanır, sabit xal əvəzinə
+        if current_speed_kmh and speed_limit_kmh and speed_limit_kmh > 0:
+            overspeed_pct = ((current_speed_kmh - speed_limit_kmh) / speed_limit_kmh) * 100
+            overspeed_pct = max(0, overspeed_pct)
+            speeding_score = 10 + (overspeed_pct * 0.6)
+            score += min(speeding_score, 70)
+        else:
+            # Sürət/limit məlumatı yoxdursa, fallback
+            score += 20
+    else:
+        score += base_scores.get(event_type, 20)
+
+    # 2. Aşkarlanan obyektlərə görə xal (tavanla məhdudlaşdırılıb)
+    high_risk_objects = {"person", "bicycle", "motorcycle"}
     medium_risk_objects = {"car", "truck", "bus", "traffic light", "stop sign"}
 
+    object_score = 0
     for d in detections:
         obj = d["object"]
         conf = d["confidence"]
         if obj in high_risk_objects:
-            score += int(30 * conf)
+            object_score += int(30 * conf)
         elif obj in medium_risk_objects:
-            score += int(15 * conf)
+            object_score += int(15 * conf)
+    score += min(object_score, 40)
 
-    # 3. G-qüvvəsinə görə əlavə xal
-    g_force = accel_data.get("gForce", 0) if accel_data else 0
-    if g_force >= 1.0:
+    # 3. G-qüvvəsinə görə əlavə xal (genişləndirilmiş şkala)
+    g_force = (accel_data.get("gForce") if accel_data else None) or 0
+    if g_force >= 2.5:
+        score += 35
+    elif g_force >= 1.5:
+        score += 25
+    elif g_force >= 1.0:
         score += 20
     elif g_force >= 0.7:
         score += 10
 
-    score = min(score, 100)  # maksimum 100
+    score = max(0, min(score, 100))  # 0-100 aralığında clamp
 
-    # Severity təsnifatı (texniki tapşırıq Bölmə M7)
+    # Severity təsnifatı (texniki tapşırıq Bölmə M7, dəyişməz)
     if score >= 70:
         severity = "HIGH"
     elif score >= 30:
@@ -133,8 +166,17 @@ async def process_job(job, job_token):
     print(f"[Worker] İş başladı — eventId: {event_id}, type: {event_type}")
 
     try:
+        # İdempotentlik: event artıq COMPLETED-dirsə, təkrar emal etmə
+        current_status = get_event_status(event_id)
+        if current_status == "COMPLETED":
+            print(f"[Worker] Event artıq COMPLETED — təkrar emal atlanır, eventId: {event_id}")
+            return
+
         # 1. Status PROCESSING
         update_event_processing(event_id)
+
+        if not frame_key:
+            raise ValueError(f"frameR2Key tapılmadı — eventId: {event_id}, job data: {data}")
 
         # 2. R2-dən frame endir
         print(f"[Worker] Frame endiriliyr: {frame_key}")
@@ -145,14 +187,7 @@ async def process_job(job, job_token):
         detections = run_inference(image_bytes)
         print(f"[Worker] Aşkarlamalar: {detections}")
 
-        # 4. Risk hesabla
-        score, severity = calculate_risk(detections, accel_data, event_type)
-        print(f"[Worker] Risk xalı: {score}, Severity: {severity}")
-
-        # 5. Xülasə yarat
-        summary = build_summary(detections, event_type, severity, score)
-
-        # 5.1. Enrichment (Weather & Road)
+        # 4. Enrichment (Weather & Road)
         weather_info = None
         road_info = None
         if lat is not None and lng is not None:
@@ -163,6 +198,17 @@ async def process_job(job, job_token):
                 print(f"[Worker] Enrichment xətası (uduldu): {e}")
         else:
             print(f"[Worker] GPS tapılmadı — eventId: {event_id}, enrichment atlanır")
+
+        # 5. Risk hesabla
+        score, severity = calculate_risk(
+            detections, accel_data, event_type,
+            current_speed_kmh=gps.get("speed"),
+            speed_limit_kmh=road_info.get("speedLimitKmh") if road_info else None,
+        )
+        print(f"[Worker] Risk xalı: {score}, Severity: {severity}")
+
+        # 6. Xülasə yarat
+        summary = build_summary(detections, event_type, severity, score)
 
         # 5.2. Narrative Generation
         narrative_result = None

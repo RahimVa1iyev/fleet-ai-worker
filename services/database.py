@@ -8,6 +8,18 @@ def get_connection():
     return psycopg2.connect(os.environ["DATABASE_URL"])
 
 
+def get_event_status(event_id: str) -> str | None:
+    """Event-in hazırkı aiStatus-unu DB-dən oxu"""
+    conn = get_connection()
+    try:
+        with conn.cursor() as cur:
+            cur.execute('SELECT "aiStatus" FROM trip_events WHERE id = %s', (event_id,))
+            row = cur.fetchone()
+            return row[0] if row else None
+    finally:
+        conn.close()
+
+
 def update_event_processing(event_id: str):
     conn = get_connection()
     try:
@@ -86,5 +98,21 @@ def get_driver_fcm_token(event_id: str):
             )
             row = cur.fetchone()
             return row[0] if row else None
+    finally:
+        conn.close()
+
+def clear_driver_fcm_token(driver_id: str) -> None:
+    conn = get_connection()
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                UPDATE drivers
+                SET "fcmToken" = NULL
+                WHERE id = %s
+                """,
+                (driver_id,)
+            )
+            conn.commit()
     finally:
         conn.close()
